@@ -1,0 +1,196 @@
+globals().clear()
+
+#pip install ipython
+import pandas as pd
+import os
+from collections import OrderedDict
+import xlsxwriter
+from IPython.display import display
+import numpy as np
+from string_grouper import match_strings, match_most_similar, \
+    group_similar_strings, compute_pairwise_similarities, \
+    StringGrouper
+
+
+#Import Datasets BANK1
+
+import glob
+files_csob_list = glob.glob("Import_csob/*.csv")
+files_csob = []
+for filename in files_csob_list:
+    csob = pd.read_csv(filename, sep=';')
+    files_csob.append(csob)
+csob = pd.concat(files_csob, axis=0, ignore_index=True)
+# print(csob)
+print(csob.shape)
+
+
+#Import Datasets BANK2
+
+files_fio_list = glob.glob("Import_fio/*.csv")
+files_fio = []
+for filename in files_fio_list:
+    fio = pd.read_csv(filename, sep=';')
+    files_fio.append(fio)
+fio = pd.concat(files_fio, axis=0, ignore_index=True)
+# print(fio)
+print(fio.shape)
+
+pd.set_option('display.width', 500)
+pd.set_option('display.max_columns',30)
+pd.options.display.max_colwidth=150
+
+
+
+
+
+# BANK1 correction
+
+N = 3
+# Drop last N columns of dataframe
+csob = csob.iloc[: , :-14]
+#print(csob)
+
+csob.drop(['alias','název úètu','datum valuty','zùstatek'], axis=1, inplace=True)
+csob = csob.set_axis(['Zdrojový účet', 'Upřesnění - měna', 'Datum', 'Objem', 'Měna', 'KS', 'VS', 'SS', 'Typ', 'Poznámka', 'Protiúčet', 'Zpráva pro příjemce'], axis=1, inplace=False)
+csob = csob.loc[:,~csob.columns.duplicated()].copy()
+#print(csob)
+
+
+# Bank2 correction
+
+fio['Zdrojový účet']  = fio['Zdrojový účet'].astype(str)
+
+
+# Do not delete - Option1
+
+# def Bank_Code(x):
+#     if (x).isdigit():
+#          return (x) + '/2010'
+#     else:
+#         pass
+#
+# fio['Zdrojový účet']  = fio['Zdrojový účet'].map(Bank_Code)
+#
+# fio.to_excel('fio1.xlsx')
+#
+# fio['Protiúčet'] = fio['Protiúčet'].astype(str)
+# fio['Kód banky'] = fio['Kód banky'].astype(str)
+#
+#
+# def Bank_Code2(y,z):
+#     if (y).isdigit():
+#         return (y) + '/' + (z)
+#     else:
+#         pass
+#
+#
+# fio['Protiúčet'] = fio.apply(lambda x: Bank_Code2(y = x['Protiúčet'], z = x['Kód banky']), axis=1)
+
+# fio.to_excel('fio2.xlsx')
+
+# Do not delete - Option2
+# fio['Protiúčet'] = fio['Protiúčet'].astype(str)+'/'
+# fio['Protiúčet'] = fio['Protiúčet'] + fio['Kód banky']
+# fio['Protiúčet'] = fio['Protiúčet'].astype(str)+'/'+ fio['Kód banky']
+# fio['Protiúčet'] = fio['Protiúčet'].astype(str)+'/'+ fio['Kód banky']
+
+
+fio.drop(['Upřesnění - objem','SS.1','VS.1','KS.1'], axis=1, inplace=True)
+fio = fio.loc[:,~fio.columns.duplicated()].copy()
+column_to_move = fio.pop("KS")
+fio.insert(15, "KS", column_to_move)
+column_to_move = fio.pop("Upřesnění - měna")
+fio.insert(4, "Upřesnění - měna", column_to_move)
+
+
+# Merge and correct all accounts
+
+frames  = [fio, csob]
+all_accounts = pd.concat(frames)
+all_accounts['Zdrojový účet'] = all_accounts['Zdrojový účet'].str.split('/',expand=True)
+all_accounts[['Protiúčet',"Kod_Banky_Protiucet"]] = all_accounts["Protiúčet"].str.split('/',expand=True)
+# all_accounts.to_excel('all_accounts.xlsx')
+test1=fio.columns.difference(csob.columns)
+test1=csob.columns.difference(fio.columns)
+
+
+
+# Add counter-account name
+
+all_accounts["counter-account_name"] = all_accounts[["Zpráva pro příjemce","Poznámka","Název protiúčtu","Typ"]].astype(str).apply(' '.join, axis=1)
+
+
+# Correct all acounts
+
+all_accounts['Objem'] = all_accounts['Objem'].str.replace(',','.')
+all_accounts['Objem'] = all_accounts['Objem'].str.replace('Kč','')
+all_accounts['Objem'] = all_accounts['Objem'].str.replace(' ','')
+all_accounts = all_accounts.apply(pd.to_numeric, errors='ignore')
+final_table_columns = ['Zdrojový účet','Datum', 'Objem', 'Měna', 'KS', 'VS', 'SS', 'Typ','Protiúčet',"counter-account_name","ID operace",'Kód banky',"Kod_Banky_Protiucet"]
+all_accounts = all_accounts.drop(columns=[col for col in all_accounts if col not in final_table_columns])
+all_accounts.drop_duplicates(inplace=True)
+print(all_accounts.shape)
+# all_accounts.to_excel('all_accounts_test.xlsx')
+
+
+# Create unicate account Dataframe
+table = all_accounts.groupby('Protiúčet')['counter-account_name'].apply(list)
+#print(table)
+table = table.to_frame()
+
+
+
+all_accounts = all_accounts.drop('counter-account_name', axis=1)
+print(all_accounts.shape)
+all_accounts2=pd.merge(table, all_accounts, how="right",  on = "Protiúčet")
+
+print(all_accounts2.shape)
+print(table.shape)
+
+
+#Drop duplicates in cell
+all_accounts2['counter-account_name'] = all_accounts2['counter-account_name'].astype(str).str[1:-1]
+all_accounts2['counter-account_name'] = all_accounts2['counter-account_name'].str.replace(',', '')
+all_accounts2['counter-account_name'] = all_accounts2['counter-account_name'].str.replace('nan', '')
+all_accounts2['counter-account_name'] = all_accounts2['counter-account_name'].str.replace('/', '')
+all_accounts2['counter-account_name'] = all_accounts2['counter-account_name'].str.replace('\d+', '')
+all_accounts2['counter-account_name'] = (all_accounts2['counter-account_name'].str.split()
+                               .apply(lambda x: OrderedDict.fromkeys(x).keys())
+                              .str.join(' '))
+
+
+
+newpath = "Export"
+if not os.path.exists(newpath):
+    os.makedirs(newpath)
+
+
+all_accounts2 = all_accounts2.rename({'Zdrojový účet': 'Zdrojový_účet'}, axis=1)
+all_accounts2['Objem']  = all_accounts2['Objem'].apply(pd.to_numeric, errors='ignore')
+
+Wellness = ["2102031835","2502010187","283708622","220714304"]
+all_accounts_Residences= all_accounts2[all_accounts2.Zdrojový_účet.isin(Wellness) == False]
+all_accounts_Residences.to_excel(r'Export\Joined accounts Residences.xlsx')
+
+
+Residences = ["700455583","2801885514","2602257507","2502010187","2301885067","2001885065","2001885065","2302379641","2502379646","3240050","2902102793"]
+all_accounts_Wellness= all_accounts2[all_accounts2.Zdrojový_účet.isin(Residences) == False]
+all_accounts_Wellness.to_excel(r'Export\Joined accounts Wellness.xlsx')
+
+all_accounts2.to_excel(r'Export\Joined accounts.xlsx')
+
+table.to_excel(r'Export\Counter accounts.xlsx')
+
+
+print (all_accounts2.dtypes)
+print(all_accounts2.shape)
+print(type(all_accounts2))
+
+
+# Total = all_accounts['Objem'].sum()
+# print(Total)
+
+
+
+
